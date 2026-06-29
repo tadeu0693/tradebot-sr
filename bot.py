@@ -106,7 +106,7 @@ def get_balance(client):
         resp  = client.get_wallet_balance(accountType="UNIFIED")
         coins = resp["result"]["list"][0]["coin"]
         for coin in coins:
-            if coin["coin"] == "USDT":
+            if coin["coin"] in ("USDT", "USDT2", "USDTb", "USDTE"):
                 return float(coin["availableToWithdraw"])
     except:
         pass
