@@ -32,7 +32,6 @@ state = {
     "last_update": "", "history": [], "testnet": TESTNET,
 }
 
-# Flask app
 app = Flask(__name__)
 CORS(app)
 
@@ -44,13 +43,29 @@ def get_status():
 def health():
     return jsonify({"ok": True})
 
-# ── BOT ─────────────────────────────────────────────────
+def get_balance(client):
+    try:
+        resp = client.get_wallet_balance(accountType="UNIFIED")
+        coins = resp["result"]["list"][0]["coin"]
+        total = 0.0
+        for coin in coins:
+            avail = coin.get("availableToWithdraw") or coin.get("walletBalance") or "0"
+            log.info(f"💰 {coin['coin']}: {avail}")
+            if "USDT" in coin["coin"].upper():
+                try:
+                    total += float(avail or 0)
+                except:
+                    pass
+        return total
+    except Exception as e:
+        log.error(f"Erro saldo: {e}")
+        return 0.0
+
 def bot_loop():
-    log.info("🤖 bot_loop() iniciado")
-    
+    log.info("🤖 bot_loop iniciado")
+
     if not API_KEY or not API_SECRET:
         state["status"] = "erro: sem credenciais"
-        log.error("❌ API_KEY ou API_SECRET não configurados!")
         return
 
     try:
@@ -59,58 +74,45 @@ def bot_loop():
         log.info(f"✅ Conectado {'TESTNET' if TESTNET else 'REAL'} — {SYMBOL}")
         state["status"] = "rodando"
     except Exception as e:
-        log.error(f"❌ Erro conexão: {e}")
+        log.error(f"❌ Conexão: {e}")
         state["status"] = f"erro: {e}"
         return
 
-    support    = 0.0
+    support = 0.0
     resistance = 0.0
     in_position = False
     entry_price = 0.0
-    qty         = 0.0
-    sr_tick     = 0
-    bal_tick    = 0
-    bal         = 0.0
+    qty = 0.0
+    sr_tick = 0
+    bal_tick = 0
+    bal = 0.0
 
     while True:
         try:
-            log.info("🔄 tick...")
-
-            # Atualiza S/R a cada 15min (180 ticks de 5s)
+            # Atualiza S/R a cada 15min
             sr_tick += 1
             if sr_tick >= 180 or support == 0.0:
-                resp = client.get_kline(category="spot", symbol=SYMBOL, interval="15", limit=LOOKBACK+5)
+                resp = client.get_kline(category="spot", symbol=SYMBOL, interval="15", limit=LOOKBACK + 5)
                 rows = resp["result"]["list"]
-                df = pd.DataFrame(rows, columns=["time","open","high","low","close","volume","turnover"])
-                df["high"]  = df["high"].astype(float)
-                df["low"]   = df["low"].astype(float)
-                support    = round(df["low"].astype(float).rolling(LOOKBACK).min().iloc[-1], 2)
-                resistance = round(df["high"].astype(float).rolling(LOOKBACK).max().iloc[-1], 2)
+                highs = [float(r[2]) for r in rows]
+                lows  = [float(r[3]) for r in rows]
+                support    = round(min(lows[-LOOKBACK:]), 2)
+                resistance = round(max(highs[-LOOKBACK:]), 2)
                 state["support"]    = support
                 state["resistance"] = resistance
                 sr_tick = 0
                 log.info(f"📊 S/R | S={support} R={resistance}")
 
-            # Atualiza saldo a cada 30s (6 ticks)
+            # Atualiza saldo a cada 30s
             bal_tick += 1
             if bal_tick >= 6:
-                try:
-                    resp2 = client.get_wallet_balance(accountType="UNIFIED")
-                    coins = resp2["result"]["list"][0]["coin"]
-                    bal = 0.0
-                    for coin in coins:
-                        avail = coin.get('availableToWithdraw') or coin.get('walletBalance') or coin.get('equity') or 0
-                    log.info(f"💰 {coin['coin']}: avail={avail} wallet={coin.get('walletBalance',0)}")
-                        if "USDT" in coin["coin"].upper():
-                            bal += float(avail or 0)
-                    state["balance"] = round(bal, 2)
-                    bal_tick = 0
-                except Exception as e:
-                    log.error(f"Erro saldo: {e}")
+                bal = get_balance(client)
+                state["balance"] = round(bal, 2)
+                bal_tick = 0
 
             # Preço atual
-            resp3  = client.get_tickers(category="spot", symbol=SYMBOL)
-            price  = float(resp3["result"]["list"][0]["lastPrice"])
+            resp2 = client.get_tickers(category="spot", symbol=SYMBOL)
+            price = float(resp2["result"]["list"][0]["lastPrice"])
 
             # Sinal
             zone = price * TOLERANCE
@@ -129,11 +131,10 @@ def bot_loop():
                 "last_update": datetime.now().strftime("%H:%M:%S"),
             })
 
-            log.info(f"💲 {price:.2f} | S={support} R={resistance} | {sig} | bal={bal:.2f}")
-
-            # P&L ao vivo
             if in_position and entry_price > 0:
                 state["pnl_live_pct"] = round((price - entry_price) / entry_price * 100, 2)
+
+            log.info(f"💲 {price:.2f} | S={support} R={resistance} | {sig} | bal={bal:.2f}")
 
             # COMPRA
             if sig == "BUY" and not in_position and bal >= TRADE_USDT:
@@ -142,8 +143,10 @@ def bot_loop():
                 entry_price = price
                 in_position = True
                 state["trades_today"] += 1
+                state["in_position"]  = True
+                state["entry_price"]  = round(entry_price, 2)
                 log.info(f"🟢 COMPRA {qty} @ ${price:.2f}")
-                state["history"].insert(0, {"side":"BUY","price":price,"time":datetime.now().strftime("%H:%M"),"pnl":None})
+                state["history"].insert(0, {"side": "BUY", "price": price, "time": datetime.now().strftime("%H:%M"), "pnl": None})
 
             # VENDA
             elif in_position:
@@ -154,12 +157,14 @@ def bot_loop():
                     client.place_order(category="spot", symbol=SYMBOL, side="Sell", orderType="Market", qty=str(qty))
                     in_position = False
                     state["in_position"] = False
-                    state["pnl_today"] = round(state["pnl_today"] + pnl_usd, 2)
-                    if pnl_usd >= 0: state["wins"] += 1
-                    else: state["losses"] += 1
+                    state["pnl_today"]   = round(state["pnl_today"] + pnl_usd, 2)
+                    if pnl_usd >= 0:
+                        state["wins"] += 1
+                    else:
+                        state["losses"] += 1
                     reason = "TP" if price >= tp else ("SL" if price <= sl else "SELL")
                     log.info(f"🔴 VENDA [{reason}] @ ${price:.2f} | P&L: ${pnl_usd:+.2f}")
-                    state["history"].insert(0, {"side":"SELL","price":price,"time":datetime.now().strftime("%H:%M"),"pnl":round(pnl_usd,2)})
+                    state["history"].insert(0, {"side": "SELL", "price": price, "time": datetime.now().strftime("%H:%M"), "pnl": round(pnl_usd, 2)})
                     state["history"] = state["history"][:20]
 
         except Exception as e:
@@ -167,11 +172,9 @@ def bot_loop():
 
         time.sleep(5)
 
-# Inicia bot em thread antes do Flask
-log.info("🚀 Iniciando thread do bot...")
-t = threading.Thread(target=bot_loop, daemon=True)
-t.start()
-log.info("🚀 Thread iniciada!")
+
+# Inicia bot antes do Flask
+threading.Thread(target=bot_loop, daemon=True).start()
 
 if __name__ == "__main__":
     log.info(f"🌐 Flask na porta {PORT}")
