@@ -123,9 +123,12 @@ def main_loop(client):
     bal = 0.0
     tick = 0
 
+    log.info("🚀 main_loop iniciado")
     while True:
         try:
+            log.info("🔄 buscando preco...")
             price = get_current_price(client)
+            log.info(f"✅ preco={price}")
             s1    = sr_levels["support"]
             r1    = sr_levels["resistance"]
 
