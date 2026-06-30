@@ -99,9 +99,10 @@ def bot_loop():
                     coins = resp2["result"]["list"][0]["coin"]
                     bal = 0.0
                     for coin in coins:
-                        log.info(f"💰 {coin['coin']}: {coin.get('availableToWithdraw',0)}")
+                        avail = coin.get('availableToWithdraw') or coin.get('walletBalance') or coin.get('equity') or 0
+                    log.info(f"💰 {coin['coin']}: avail={avail} wallet={coin.get('walletBalance',0)}")
                         if "USDT" in coin["coin"].upper():
-                            bal += float(coin.get("availableToWithdraw") or 0)
+                            bal += float(avail or 0)
                     state["balance"] = round(bal, 2)
                     bal_tick = 0
                 except Exception as e:
