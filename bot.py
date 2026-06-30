@@ -218,14 +218,6 @@ def run_bot():
     except Exception as e:
         log.error(f"Erro S/R inicial: {e}")
 
-    # Carrega saldo inicial
-    try:
-        bal = get_balance(client)
-        state["balance"] = round(bal, 2)
-        log.info(f"💰 Saldo inicial: {bal:.2f}")
-    except Exception as e:
-        log.error(f"Erro saldo inicial: {e}")
-
     threading.Thread(target=sr_updater, args=(client,), daemon=True).start()
     threading.Thread(target=main_loop, args=(client,), daemon=True).start()
 
