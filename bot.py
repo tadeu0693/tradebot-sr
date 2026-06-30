@@ -56,8 +56,14 @@ def get_client():
     return client
 
 def get_current_price(client):
-    resp = client.get_tickers(category="spot", symbol=SYMBOL)
-    return float(resp["result"]["list"][0]["lastPrice"])
+    try:
+        resp = client.get_tickers(category="spot", symbol=SYMBOL)
+        return float(resp["result"]["list"][0]["lastPrice"])
+    except Exception as e:
+        log.error(f"Erro get_price ticker: {e}")
+        # Fallback: usa ultimo candle
+        resp = client.get_kline(category="spot", symbol=SYMBOL, interval="1", limit=1)
+        return float(resp["result"]["list"][0][4])
 
 def get_klines(client):
     resp = client.get_kline(category="spot", symbol=SYMBOL, interval=TIMEFRAME, limit=LOOKBACK+10)
